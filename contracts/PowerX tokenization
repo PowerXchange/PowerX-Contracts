@@ -1,0 +1,95 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19;
+
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
+
+contract PowerXchange is ERC721URIStorage, Ownable, ReentrancyGuard {
+    struct EnergyCredit {
+        uint256 id;
+        address producer;
+        uint256 amount;
+        uint256 price;
+        bool isSold;
+    }
+
+    uint256 public nextCreditId;
+    uint256 public commissionFee = 5; // 5%
+    mapping(uint256 => EnergyCredit) public energyCredits;
+
+    event CreditCreated(uint256 id, address producer, uint256 amount, uint256 price);
+    event CreditSold(uint256 id, address buyer);
+    event CreditPriceUpdated(uint256 id, uint256 newPrice);
+
+    constructor() ERC721("EnergyCredit", "ENCR") {}
+
+    function createEnergyCredit(uint256 amount, uint256 price, string memory uri) external onlyOwner {
+        nextCreditId++;
+        energyCredits[nextCreditId] = EnergyCredit(nextCreditId, msg.sender, amount, price, false);
+        _mint(msg.sender, nextCreditId);
+        _setTokenURI(nextCreditId, uri);
+        emit CreditCreated(nextCreditId, msg.sender, amount, price);
+    }
+
+    function buyEnergyCredit(uint256 id) external payable nonReentrant {
+        EnergyCredit storage credit = energyCredits[id];
+        require(!credit.isSold, "Credit already sold");
+        require(msg.value == credit.price, "Incorrect value sent");
+
+        credit.isSold = true;
+        uint256 commission = (msg.value * commissionFee) / 100;
+        payable(owner()).transfer(commission);
+        payable(credit.producer).transfer(msg.value - commission);
+        _transfer(credit.producer, msg.sender, id);
+
+        emit CreditSold(id, msg.sender);
+    }
+
+    function updateCreditPrice(uint256 id, uint256 newPrice) external {
+        EnergyCredit storage credit = energyCredits[id];
+        require(credit.producer == msg.sender, "Not the producer");
+        require(!credit.isSold, "Credit already sold");
+        credit.price = newPrice;
+
+        emit CreditPriceUpdated(id, newPrice);
+    }
+
+    function getAvailableCredits() external view returns (EnergyCredit[] memory) {
+        uint256 availableCount;
+        for (uint256 i = 1; i <= nextCreditId; i++) {
+            if (!energyCredits[i].isSold) {
+                availableCount++;
+            }
+        }
+
+        EnergyCredit[] memory availableCredits = new EnergyCredit[](availableCount);
+        uint256 index;
+        for (uint256 i = 1; i <= nextCreditId; i++) {
+            if (!energyCredits[i].isSold) {
+                availableCredits[index] = energyCredits[i];
+                index++;
+            }
+        }
+        return availableCredits;
+    }
+
+    function setCommissionFee(uint256 newFee) external onlyOwner {
+        require(newFee <= 100, "Fee cannot be more than 100%");
+        commissionFee = newFee;
+    }
+
+    function getCreditDetails(uint256 id) external view returns (EnergyCredit memory) {
+        return energyCredits[id];
+    }
+
+    function getCreditsOwned() external view returns (uint256[] memory) {
+        uint256 ownedCount = balanceOf(msg.sender);
+        uint256[] memory ownedCredits = new uint256[](ownedCount);
+        for (uint256 i = 0; i < ownedCount; i++) {
+            ownedCredits[i] = tokenOfOwnerByIndex(msg.sender, i);
+        }
+        return ownedCredits;
+    }
+}
