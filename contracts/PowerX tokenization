@@ -5,8 +5,9 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
+import "@openzeppelin/contracts/security/Pausable.sol";
 
-contract PowerXchange is ERC721URIStorage, Ownable, ReentrancyGuard {
+contract PowerXchange is ERC721URIStorage, Ownable, ReentrancyGuard, Pausable {
     struct EnergyCredit {
         uint256 id;
         address producer;
@@ -19,13 +20,20 @@ contract PowerXchange is ERC721URIStorage, Ownable, ReentrancyGuard {
     uint256 public commissionFee = 5; // 5%
     mapping(uint256 => EnergyCredit) public energyCredits;
 
-    event CreditCreated(uint256 id, address producer, uint256 amount, uint256 price);
-    event CreditSold(uint256 id, address buyer);
-    event CreditPriceUpdated(uint256 id, uint256 newPrice);
+    event CreditCreated(uint256 indexed id, address indexed producer, uint256 amount, uint256 price);
+    event CreditSold(uint256 indexed id, address indexed buyer);
+    event CreditPriceUpdated(uint256 indexed id, uint256 newPrice);
+    event CreditTransferred(uint256 indexed id, address indexed from, address indexed to);
+    event CommissionFeeUpdated(uint256 newFee);
 
     constructor() ERC721("EnergyCredit", "ENCR") {}
 
-    function createEnergyCredit(uint256 amount, uint256 price, string memory uri) external onlyOwner {
+    modifier onlyProducer(uint256 id) {
+        require(energyCredits[id].producer == msg.sender, "Not the producer");
+        _;
+    }
+
+    function createEnergyCredit(uint256 amount, uint256 price, string memory uri) external whenNotPaused {
         nextCreditId++;
         energyCredits[nextCreditId] = EnergyCredit(nextCreditId, msg.sender, amount, price, false);
         _mint(msg.sender, nextCreditId);
@@ -33,7 +41,7 @@ contract PowerXchange is ERC721URIStorage, Ownable, ReentrancyGuard {
         emit CreditCreated(nextCreditId, msg.sender, amount, price);
     }
 
-    function buyEnergyCredit(uint256 id) external payable nonReentrant {
+    function buyEnergyCredit(uint256 id) external payable nonReentrant whenNotPaused {
         EnergyCredit storage credit = energyCredits[id];
         require(!credit.isSold, "Credit already sold");
         require(msg.value == credit.price, "Incorrect value sent");
@@ -47,9 +55,8 @@ contract PowerXchange is ERC721URIStorage, Ownable, ReentrancyGuard {
         emit CreditSold(id, msg.sender);
     }
 
-    function updateCreditPrice(uint256 id, uint256 newPrice) external {
+    function updateCreditPrice(uint256 id, uint256 newPrice) external onlyProducer(id) whenNotPaused {
         EnergyCredit storage credit = energyCredits[id];
-        require(credit.producer == msg.sender, "Not the producer");
         require(!credit.isSold, "Credit already sold");
         credit.price = newPrice;
 
@@ -78,6 +85,7 @@ contract PowerXchange is ERC721URIStorage, Ownable, ReentrancyGuard {
     function setCommissionFee(uint256 newFee) external onlyOwner {
         require(newFee <= 100, "Fee cannot be more than 100%");
         commissionFee = newFee;
+        emit CommissionFeeUpdated(newFee);
     }
 
     function getCreditDetails(uint256 id) external view returns (EnergyCredit memory) {
@@ -91,5 +99,28 @@ contract PowerXchange is ERC721URIStorage, Ownable, ReentrancyGuard {
             ownedCredits[i] = tokenOfOwnerByIndex(msg.sender, i);
         }
         return ownedCredits;
+    }
+
+    function transferEnergyCredit(uint256 id, address to) external onlyProducer(id) whenNotPaused {
+        require(to != address(0), "Cannot transfer to zero address");
+        require(!energyCredits[id].isSold, "Credit already sold");
+
+        _transfer(msg.sender, to, id);
+        energyCredits[id].producer = to;
+
+        emit CreditTransferred(id, msg.sender, to);
+    }
+
+    function updateTokenURI(uint256 id, string memory newUri) external onlyProducer(id) {
+        require(_exists(id), "Token does not exist");
+        _setTokenURI(id, newUri);
+    }
+
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
     }
 }
